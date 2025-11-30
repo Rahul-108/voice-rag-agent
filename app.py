@@ -61,27 +61,31 @@ async def text_to_speech(text, output_file="response.mp3"):
 
 def record_audio():
     """Records audio from the system microphone."""
-    r= sr.Recognizer()
-    #Dynamic energy threshold adjustment for noisy environments
-    r.dynamic_energy_threshold = True
+    try:
+        r= sr.Recognizer()
+        #Dynamic energy threshold adjustment for noisy environments
+        r.dynamic_energy_threshold = True
 
-    with sr.Microphone() as source:
-        st.toast("Listening......Speak now!")
-        try:
-            # audio = r.listen(source, timeout=40, phrase_time_limit=400)
-            audio = r.listen(source, timeout=40)
-            st.toast("Processing audio...")
-            text = r.recognize_google(audio)
-            return text
-        except sr.WaitTimeoutError:
-            st.warning("Time out! No speech detected.")
-            return None
-        except sr.UnknownValueError:
-            st.warning("Could not understand audio.")
-            return None
-        except Exception as e:
-            st.error(f"Microphone error: {e}")
-            return None
+        with sr.Microphone() as source:
+            st.toast("Listening......Speak now!")
+            try:
+                # audio = r.listen(source, timeout=40, phrase_time_limit=400)
+                audio = r.listen(source, timeout=40)
+                st.toast("Processing audio...")
+                text = r.recognize_google(audio)
+                return text
+            except sr.WaitTimeoutError:
+                st.warning("Time out! No speech detected.")
+                return None
+            except sr.UnknownValueError:
+                st.warning("Could not understand audio.")
+                return None
+            except Exception as e:
+                st.error(f"Microphone error: {e}")
+                return None
+    except AttributeError:
+        st.error("⚠️ Microphone not available. Voice input only works when running locally with PyAudio installed.")
+        return None
 
 @st.cache_resource
 def get_embeddings_model():

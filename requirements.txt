@@ -1,7 +1,6 @@
 streamlit
 python-dotenv
 speechrecognition
-PyAudio
 pydub
 edge-tts
 faiss-cpu
