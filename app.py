@@ -5,11 +5,7 @@ import speech_recognition as sr
 import edge_tts
 import asyncio
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_community.embeddings import HuggingFaceEmbeddings
-#GoogleGenerativeAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_community.document_loaders import PyPDFLoader
 import tempfile
 
 load_dotenv()
@@ -29,6 +25,9 @@ st.markdown("""
             border-radius: 15px;
             padding: 15px;
             margin-bottom: 10px;    
+        }
+        .stChatMessage p, .stChatMessage div {
+            color: #FFFFFF !important;
         }
         .stButton>button{
             width: 100%;
@@ -83,9 +82,19 @@ def record_audio():
         except Exception as e:
             st.error(f"Microphone error: {e}")
             return None
-        
+
+@st.cache_resource
+def get_embeddings_model():
+    """Cached embeddings model to avoid re-downloading."""
+    from langchain_huggingface import HuggingFaceEmbeddings
+    return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
 def get_vector_store(uploaded_file):
-    """Processes uploded PDF and creates a FAISS vector store."""
+    """Processes uploaded PDF and creates a FAISS vector store."""
+    # Lazy imports - only load when needed
+    from langchain_community.vectorstores import FAISS
+    from langchain_community.document_loaders import PyPDFLoader
+    
     with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
         tmp_file.write(uploaded_file.getvalue())
         tmp_file_path = tmp_file.name
@@ -96,8 +105,8 @@ def get_vector_store(uploaded_file):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     text_chunks = text_splitter.split_documents(documents)
 
-    # embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    # Use cached embeddings model
+    embeddings = get_embeddings_model()
     vector_store = FAISS.from_documents(text_chunks, embeddings)
 
     os.unlink(tmp_file_path)
@@ -116,7 +125,7 @@ with st.sidebar:
 
     if st.button("Clear Chat Memory"):
         st.session_state.chat_history = []
-        st.experimental_rerun()
+        st.rerun()
 
 
 st.title("AI Voice Agent")
