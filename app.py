@@ -7,12 +7,13 @@ import asyncio
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import tempfile
+import io
 
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 if not GOOGLE_API_KEY:
-    st.error("⚠️ API Key missing! Please create a .env file with GOOGLE_API_KEY")
+    st.error("⚠️ API Key missing! Please set GOOGLE_API_KEY in Streamlit secrets or .env file")
     st.stop()
 
 st.set_page_config(page_title="Voice Brain", page_icon="🧠", layout="wide")
@@ -51,6 +52,8 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "vector_store" not in st.session_state:
     st.session_state.vector_store = None
+if "processed_audio" not in st.session_state:
+    st.session_state.processed_audio = None
 
 
 async def text_to_speech(text, output_file="response.mp3"):
@@ -59,32 +62,25 @@ async def text_to_speech(text, output_file="response.mp3"):
     communicate = edge_tts.Communicate(text, "en-US-AvaNeural")
     await communicate.save(output_file)
 
-def record_audio():
-    """Records audio from the system microphone."""
+def process_audio(audio_bytes):
+    """Process audio bytes and convert to text using speech recognition."""
     try:
-        r= sr.Recognizer()
-        #Dynamic energy threshold adjustment for noisy environments
-        r.dynamic_energy_threshold = True
-
-        with sr.Microphone() as source:
-            st.toast("Listening......Speak now!")
-            try:
-                # audio = r.listen(source, timeout=40, phrase_time_limit=400)
-                audio = r.listen(source, timeout=40)
-                st.toast("Processing audio...")
-                text = r.recognize_google(audio)
-                return text
-            except sr.WaitTimeoutError:
-                st.warning("Time out! No speech detected.")
-                return None
-            except sr.UnknownValueError:
-                st.warning("Could not understand audio.")
-                return None
-            except Exception as e:
-                st.error(f"Microphone error: {e}")
-                return None
-    except AttributeError:
-        st.error("⚠️ Microphone not available. Voice input only works when running locally with PyAudio installed.")
+        r = sr.Recognizer()
+        # Convert audio bytes to AudioData
+        # Streamlit audio_input returns WAV format
+        audio_data = sr.AudioFile(io.BytesIO(audio_bytes))
+        
+        with audio_data as source:
+            audio = r.record(source)
+        
+        st.toast("Processing audio...")
+        text = r.recognize_google(audio)
+        return text
+    except sr.UnknownValueError:
+        st.warning("Could not understand audio. Please speak clearly and try again.")
+        return None
+    except Exception as e:
+        st.error(f"Audio processing error: {e}")
         return None
 
 @st.cache_resource
@@ -129,6 +125,7 @@ with st.sidebar:
 
     if st.button("Clear Chat Memory"):
         st.session_state.chat_history = []
+        st.session_state.processed_audio = None
         st.rerun()
 
 
@@ -142,36 +139,52 @@ with container:
             st.write(message["content"])
 
 
-col1, col2, col3 = st.columns([1,2,1])
+# Voice input section
+st.markdown("### 🎤 Ask a Question")
 
-with col2:
-    if st.button("Tap to Speak"):
+# Browser-based audio input - works on Streamlit Cloud!
+audio_input = st.audio_input("Click to record your question")
+
+if audio_input:
+    # Get a unique identifier for this audio
+    audio_id = id(audio_input)
+    
+    # Only process if this is a new audio recording
+    if st.session_state.processed_audio != audio_id:
         if st.session_state.vector_store is None:
             st.error("Please upload a PDF in the sidebar first!")
         else:
-            user_input = record_audio()
+            # Read audio bytes
+            audio_bytes = audio_input.read()
+            
+            # Process audio to text
+            user_input = process_audio(audio_bytes)
+            
+            if user_input:
+                st.session_state.chat_history.append({"role":"user", "content": user_input})
 
-        if user_input:
-            st.session_state.chat_history.append({"role":"user", "content": user_input})
+                with st.spinner("Thinking..."):
+                    retriever = st.session_state.vector_store.as_retriever()
+                    relevant_docs = retriever.invoke(user_input)
+                    context = "\n".join([doc.page_content for doc in relevant_docs])
 
-            retriever =st.session_state.vector_store.as_retriever()
-            relevant_docs = retriever.invoke(user_input)
-            context = "\n".join([doc.page_content for doc in relevant_docs])
+                    llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-exp", google_api_key=GOOGLE_API_KEY)
 
-            llm = ChatGoogleGenerativeAI(model="models/gemini-2.5-flash", google_api_key=GOOGLE_API_KEY)
+                    system_prompt = (
+                        "You are a helpful voice assistant. Answer the question concisely based ONLY on the provided context."
+                        "If answer is not in the context, say 'I don't see that in the document'. "
+                        "Keep your answer under 3 sentences for better voice experience."
+                    )
 
-            system_prompt = (
-                "You are a helpful voice assistant. Answer the question concisely based ONLY on the provided context."
-                "If answer is not in the context, say 'I don't see that in the document'. "
-                "Keep your answer under 3 sentences for better voice experience."
-            )
+                    full_prompt = f"{system_prompt}\n\nContext: {context}\n\nQuestion: {user_input}"
+                    response = llm.invoke(full_prompt)
+                    ai_text = response.content
 
-            full_prompt = f"{system_prompt}\n\nContext: {context}\n\nQuestion: {user_input}"
-            response = llm.invoke(full_prompt)
-            ai_text = response.content
-
-            st.session_state.chat_history.append({"role":"assistant", "content": ai_text})
-            st.rerun()
+                    st.session_state.chat_history.append({"role":"assistant", "content": ai_text})
+                
+                # Mark this audio as processed
+                st.session_state.processed_audio = audio_id
+                st.rerun()
 
 
 if st.session_state.chat_history and st.session_state.chat_history[-1]["role"] == "assistant":
